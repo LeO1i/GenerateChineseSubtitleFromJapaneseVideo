@@ -1,0 +1,9 @@
+openai-whisper==20231117
+googletrans==4.0.0rc1
+numpy>=1.23
+numba>=0.57
+tqdm>=4.65
+ffmpeg-python>=0.2.0
+# IMPORTANT: Install torch separately with the correct index-url (CPU or CUDA)
+# Example CPU:   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# Example CUDA:  pip install torch --index-url https://download.pytorch.org/whl/cu121
