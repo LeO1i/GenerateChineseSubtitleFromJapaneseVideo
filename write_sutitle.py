@@ -109,7 +109,7 @@ class WriteSubtitle:
                 else:
                     print("Warning: Failed to extract Chinese subtitles, using original file")
             
-            ffmpeg_bin = 'C:/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe'
+            ffmpeg_bin = 'C:/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe' #请把这里的地址改成你自己电脑里ffmpeg.exe的地址
             # Using POSIX style path
             srt_escaped = self._escape_path_for_ffmpeg_subtitles(srt_to_use)
 
