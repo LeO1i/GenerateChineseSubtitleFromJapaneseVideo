@@ -38,7 +38,7 @@ class JapaneseVideoSubtitleGenerator:
         print("Extracting audio from video...")
         try:
             cmd = [
-                'C:/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe',
+                'C:/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe',     #请把这里的地址改成你自己电脑里ffmpeg.exe的地址
                 '-i', video_path,
                 # Enhanced audio processing
                 '-acodec', 'pcm_s16le',
