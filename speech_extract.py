@@ -169,9 +169,9 @@ class JapaneseVideoSubtitleGenerator:
 
     def generate_srt(self, transcription_result, output_path):
         """
-        Generate SRT with enhanced formatting and validation
+        Generate SRT with both Chinese and Japanese subtitles
         """
-        print("Generating Chinese subtitles...")
+        print("Generating bilingual subtitles...")
         
         # Process segments first
         segments = self.process_segments_with_validation(transcription_result)
@@ -198,7 +198,7 @@ class JapaneseVideoSubtitleGenerator:
                 chinese_lines = self.smart_line_break(chinese_text)
                 japanese_lines = self.smart_line_break(japanese_text)
                 
-                # Write SRT entry
+                # Write SRT entry (Chinese first, then Japanese)
                 f.write(f"{i + 1}\n")
                 f.write(f"{start_time} --> {end_time}\n")
                 f.write(f"{chinese_lines}\n")
@@ -206,7 +206,7 @@ class JapaneseVideoSubtitleGenerator:
                 
                 print(f"Processing progress: {i + 1}/{len(segments)}")
         
-        print(f"Subtitle file generated: {output_path}")
+        print(f"Bilingual subtitle file generated: {output_path}")
 
     def smart_line_break(self, text, max_length=40):
         """
@@ -278,14 +278,14 @@ class JapaneseVideoSubtitleGenerator:
                 print("Error: Speech recognition did not return a valid result")
                 return False
 
-            # Generate subtitles
+            # Generate bilingual subtitles
             self.generate_srt(transcription, subtitle_path)
 
             # Clean up temp audio
             if os.path.exists(audio_path):
                 os.remove(audio_path)
 
-            print(f"SRT file generated: {subtitle_path}")
+            print(f"Bilingual SRT file generated: {subtitle_path}")
             return subtitle_path
         except Exception as e:
             import traceback
