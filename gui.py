@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import whisper
 import torch
+import subprocess
 from speech_extract import JapaneseVideoSubtitleGenerator
 from write_sutitle import WriteSubtitle
 
@@ -13,7 +14,7 @@ from write_sutitle import WriteSubtitle
 class SubtitleGeneratorGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("日语视频字幕生成器")
+        self.root.title("Japanese Subtitle Generator")
         self.root.geometry("900x750")
         self.root.resizable(True, True)
         
@@ -31,6 +32,9 @@ class SubtitleGeneratorGUI:
         self.selected_model = tk.StringVar(value="medium")
         self.processing = False
         
+        # Check system requirements on startup
+        self.check_system_requirements()
+        
         # Available Whisper models
         self.whisper_models = [
             "tiny", "base", "small", "medium", "large", "large-v2", "large-v3"
@@ -42,7 +46,7 @@ class SubtitleGeneratorGUI:
         """Handle window close event"""
         if self.processing:
             # If processing is ongoing, ask user if they want to cancel
-            result = messagebox.askyesno("确认", "正在处理中，确定要退出吗？")
+            result = messagebox.askyesno("Confirm", "Processing is in progress. Are you sure you want to exit?")
             if not result:
                 return
         
@@ -62,17 +66,17 @@ class SubtitleGeneratorGUI:
         main_frame.columnconfigure(1, weight=1)
         
         # Title
-        title_label = ttk.Label(main_frame, text="日语视频字幕生成器", 
+        title_label = ttk.Label(main_frame, text="Japanese Subtitle Generator", 
                                font=("Microsoft YaHei", 16, "bold"))
         title_label.grid(row=0, column=0, columnspan=3, pady=(0, 10))
         
         # System info frame
-        system_frame = ttk.LabelFrame(main_frame, text="系统信息", padding="5")
+        system_frame = ttk.LabelFrame(main_frame, text="System Information", padding="5")
         system_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 15))
         
         # GPU/CPU status
         device = "CUDA GPU" if torch.cuda.is_available() else "CPU"
-        device_info = f"处理设备: {device}"
+        device_info = f"Processing device: {device}"
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(0)
             device_info += f" ({gpu_name})"
@@ -86,37 +90,37 @@ class SubtitleGeneratorGUI:
         device_label.pack(anchor=tk.W)
         
         # Performance note
-        perf_note = "注意: GPU处理比CPU快很多"
+        perf_note = "Note: GPU processing is much faster than CPU"
         if not torch.cuda.is_available():
-            perf_note = "注意: CPU处理会比较慢。建议安装CUDA以获得更好的性能。"
+            perf_note = "Note: CPU processing will be slower. Install CUDA for better performance."
         
         perf_label = ttk.Label(system_frame, text=perf_note, 
                               font=("Microsoft YaHei", 9), foreground="gray")
         perf_label.pack(anchor=tk.W)
         
         # Video file selection
-        ttk.Label(main_frame, text="视频文件:", font=("Microsoft YaHei", 9)).grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Video file:", font=("Microsoft YaHei", 9)).grid(row=2, column=0, sticky=tk.W, pady=5)
         ttk.Entry(main_frame, textvariable=self.video_path, width=50, font=("Microsoft YaHei", 9)).grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
-        ttk.Button(main_frame, text="浏览", command=self.browse_video, style="TButton").grid(row=2, column=2, pady=5)
+        ttk.Button(main_frame, text="Browse", command=self.browse_video, style="TButton").grid(row=2, column=2, pady=5)
         
         # SRT file selection (for burning existing subtitles)
-        ttk.Label(main_frame, text="SRT文件 (可选):", font=("Microsoft YaHei", 9)).grid(row=3, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="SRT file (optional):", font=("Microsoft YaHei", 9)).grid(row=3, column=0, sticky=tk.W, pady=5)
         ttk.Entry(main_frame, textvariable=self.srt_path, width=50, font=("Microsoft YaHei", 9)).grid(row=3, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
-        ttk.Button(main_frame, text="浏览", command=self.browse_srt, style="TButton").grid(row=3, column=2, pady=5)
+        ttk.Button(main_frame, text="Browse", command=self.browse_srt, style="TButton").grid(row=3, column=2, pady=5)
         
         # Output directory selection
-        ttk.Label(main_frame, text="输出目录:", font=("Microsoft YaHei", 9)).grid(row=4, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Output directory:", font=("Microsoft YaHei", 9)).grid(row=4, column=0, sticky=tk.W, pady=5)
         ttk.Entry(main_frame, textvariable=self.output_dir, width=50, font=("Microsoft YaHei", 9)).grid(row=4, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
-        ttk.Button(main_frame, text="浏览", command=self.browse_output_dir, style="TButton").grid(row=4, column=2, pady=5)
+        ttk.Button(main_frame, text="Browse", command=self.browse_output_dir, style="TButton").grid(row=4, column=2, pady=5)
         
         # Whisper model selection
-        ttk.Label(main_frame, text="Whisper模型:", font=("Microsoft YaHei", 9)).grid(row=5, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Whisper model:", font=("Microsoft YaHei", 9)).grid(row=5, column=0, sticky=tk.W, pady=5)
         model_combo = ttk.Combobox(main_frame, textvariable=self.selected_model, 
                                   values=self.whisper_models, state="readonly", width=20, font=("Microsoft YaHei", 9))
         model_combo.grid(row=5, column=1, sticky=tk.W, padx=(5, 5), pady=5)
         
         # Model info
-        model_info = ttk.Label(main_frame, text="更大的模型 = 更好的准确性但处理更慢", 
+        model_info = ttk.Label(main_frame, text="Larger model = better accuracy but slower", 
                               font=("Microsoft YaHei", 8), foreground="gray")
         model_info.grid(row=5, column=2, sticky=tk.W, pady=5)
         
@@ -129,17 +133,17 @@ class SubtitleGeneratorGUI:
         button_frame.grid(row=7, column=0, columnspan=3, pady=10)
         
         # Generate subtitles button
-        self.generate_btn = ttk.Button(button_frame, text="生成字幕", 
+        self.generate_btn = ttk.Button(button_frame, text="Generate Subtitles", 
                                       command=self.generate_subtitles, style="Accent.TButton")
         self.generate_btn.pack(side=tk.LEFT, padx=5)
         
         # Burn subtitles button
-        self.burn_btn = ttk.Button(button_frame, text="烧录字幕到视频", 
+        self.burn_btn = ttk.Button(button_frame, text="Burn Subtitles to Video", 
                                   command=self.burn_subtitles)
         self.burn_btn.pack(side=tk.LEFT, padx=5)
         
         # Clear button
-        self.clear_btn = ttk.Button(button_frame, text="清除所有", 
+        self.clear_btn = ttk.Button(button_frame, text="Clear All", 
                                    command=self.clear_all)
         self.clear_btn.pack(side=tk.LEFT, padx=5)
         
@@ -148,11 +152,11 @@ class SubtitleGeneratorGUI:
         self.progress.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Status label
-        self.status_label = ttk.Label(main_frame, text="就绪", font=("Microsoft YaHei", 10))
+        self.status_label = ttk.Label(main_frame, text="Ready", font=("Microsoft YaHei", 10))
         self.status_label.grid(row=9, column=0, columnspan=3, pady=5)
         
         # Log area
-        ttk.Label(main_frame, text="处理日志:", font=("Microsoft YaHei", 9)).grid(row=10, column=0, sticky=tk.W, pady=(20, 5))
+        ttk.Label(main_frame, text="Processing log:", font=("Microsoft YaHei", 9)).grid(row=10, column=0, sticky=tk.W, pady=(20, 5))
         
         # Scrolled text for logs
         self.log_text = scrolledtext.ScrolledText(main_frame, height=15, width=80, font=("Microsoft YaHei", 9))
@@ -165,25 +169,29 @@ class SubtitleGeneratorGUI:
         self.output_dir.set(os.getcwd())
         
         # Add initial log message
-        self.log_message("GUI初始化成功")
-        self.log_message(f"处理设备: {device}")
+        self.log_message("GUI initialized successfully")
+        self.log_message(f"Processing device: {device}")
         if torch.cuda.is_available():
             self.log_message(f"GPU: {torch.cuda.get_device_name(0)}")
             cuda_version = torch.version.cuda if hasattr(torch.version, 'cuda') else "Unknown"
-            self.log_message(f"CUDA版本: {cuda_version}")
+            self.log_message(f"CUDA version: {cuda_version}")
         else:
-            self.log_message("使用CPU进行处理")
-            self.log_message("提示: 如需GPU加速，请安装CUDA版本的PyTorch")
+            self.log_message("Using CPU for processing")
+            self.log_message("Tip: For GPU acceleration, install the CUDA build of PyTorch")
+        
+        # Show help button
+        help_btn = ttk.Button(main_frame, text="Help", command=self.show_help)
+        help_btn.grid(row=12, column=0, columnspan=3, pady=10)
         
     def browse_video(self):
         """Browse for video file"""
         filetypes = [
-            ("视频文件", "*.mp4 *.mkv *.avi *.mov *.wmv *.flv"),
-            ("MP4文件", "*.mp4"),
-            ("所有文件", "*.*")
+            ("Video files", "*.mp4 *.mkv *.avi *.mov *.wmv *.flv"),
+            ("MP4", "*.mp4"),
+            ("All files", "*.*")
         ]
         filename = filedialog.askopenfilename(
-            title="选择视频文件",
+            title="Select video file",
             filetypes=filetypes
         )
         if filename:
@@ -195,12 +203,24 @@ class SubtitleGeneratorGUI:
     def browse_srt(self):
         """Browse for SRT file"""
         filetypes = [
-            ("SRT文件", "*.srt"),
-            ("所有文件", "*.*")
+            ("SRT files", "*.srt"),
+            ("All files", "*.*")
         ]
+        # Prefer opening at current SRT directory, else output directory, else CWD
+        initial_dir = None
+        try:
+            if self.srt_path.get():
+                initial_dir = os.path.dirname(self.srt_path.get())
+            elif self.output_dir.get():
+                initial_dir = self.output_dir.get()
+            else:
+                initial_dir = os.getcwd()
+        except Exception:
+            initial_dir = os.getcwd()
         filename = filedialog.askopenfilename(
-            title="选择SRT文件",
-            filetypes=filetypes
+            title="Select SRT file",
+            filetypes=filetypes,
+            initialdir=initial_dir
         )
         if filename:
             self.srt_path.set(filename)
@@ -208,7 +228,7 @@ class SubtitleGeneratorGUI:
     def browse_output_dir(self):
         """Browse for output directory"""
         directory = filedialog.askdirectory(
-            title="选择输出目录"
+            title="Select output directory"
         )
         if directory:
             self.output_dir.set(directory)
@@ -241,22 +261,22 @@ class SubtitleGeneratorGUI:
     def validate_inputs(self):
         """Validate user inputs"""
         if not self.video_path.get():
-            messagebox.showerror("错误", "请选择视频文件。")
+            messagebox.showerror("Error", "Please select a video file.")
             return False
         
         if not os.path.exists(self.video_path.get()):
-            messagebox.showerror("错误", "选择的视频文件不存在。")
+            messagebox.showerror("Error", "The selected video file does not exist.")
             return False
         
         if not self.output_dir.get():
-            messagebox.showerror("错误", "请选择输出目录。")
+            messagebox.showerror("Error", "Please select an output directory.")
             return False
         
         if not os.path.exists(self.output_dir.get()):
             try:
                 os.makedirs(self.output_dir.get())
             except Exception as e:
-                messagebox.showerror("错误", f"无法创建输出目录: {e}")
+                messagebox.showerror("Error", f"Cannot create output directory: {e}")
                 return False
         
         return True
@@ -275,11 +295,11 @@ class SubtitleGeneratorGUI:
         """Thread function for subtitle generation"""
         try:
             self.set_processing_state(True)
-            self.update_status("初始化中...")
-            self.log_message("开始生成字幕...")
+            self.update_status("Initializing...")
+            self.log_message("Start generating subtitles...")
             
             # Create generator with selected model
-            self.log_message(f"加载Whisper模型: {self.selected_model.get()}")
+            self.log_message(f"Loading Whisper model: {self.selected_model.get()}")
             generator = JapaneseVideoSubtitleGenerator()
             
             # Override the model loading to use selected model
@@ -288,10 +308,10 @@ class SubtitleGeneratorGUI:
                 device="cuda:0" if torch.cuda.is_available() else "cpu"
             )
             
-            self.log_message("模型加载成功")
+            self.log_message("Model loaded successfully")
             
             # Process video
-            self.update_status("处理视频中...")
+            self.update_status("Processing video...")
             srt_path = generator.process_video_to_srt(
                 self.video_path.get(), 
                 self.output_dir.get()
@@ -299,24 +319,24 @@ class SubtitleGeneratorGUI:
             
             if srt_path:
                 self.srt_path.set(srt_path)
-                self.log_message("字幕生成完成!")
-                self.log_message(f"双语SRT文件: {srt_path}")
-                self.log_message("注意: 烧录时会自动提取中文部分")
+                self.log_message("Subtitle generation completed!")
+                self.log_message(f"Bilingual SRT file: {srt_path}")
+                self.log_message("Note: Only Chinese lines will be burned when creating hardsubs")
                 
-                self.update_status("字幕生成完成")
-                messagebox.showinfo("成功", 
-                    f"字幕生成成功!\n\n"
-                    f"双语SRT文件 (中日文):\n{srt_path}\n\n"
-                    f"烧录时会自动提取中文部分")
+                self.update_status("Subtitle generation completed")
+                messagebox.showinfo("Success", 
+                    f"Subtitles generated successfully!\n\n"
+                    f"Bilingual SRT (JA + ZH):\n{srt_path}\n\n"
+                    f"Note: Burning uses Chinese-only lines")
             else:
-                self.log_message("字幕生成失败")
-                self.update_status("字幕生成失败")
-                messagebox.showerror("错误", "字幕生成失败。请查看日志了解详情。")
+                self.log_message("Subtitle generation failed")
+                self.update_status("Subtitle generation failed")
+                messagebox.showerror("Error", "Subtitle generation failed. Please check logs.")
                 
         except Exception as e:
-            self.log_message(f"错误: {str(e)}")
-            self.update_status("发生错误")
-            messagebox.showerror("错误", f"发生错误: {str(e)}")
+            self.log_message(f"Error: {str(e)}")
+            self.update_status("Error occurred")
+            messagebox.showerror("Error", f"Error occurred: {str(e)}")
         finally:
             self.set_processing_state(False)
     
@@ -326,11 +346,11 @@ class SubtitleGeneratorGUI:
             return
         
         if not self.srt_path.get():
-            messagebox.showerror("错误", "请选择SRT文件或先生成字幕。")
+            messagebox.showerror("Error", "Please select an SRT file or generate subtitles first.")
             return
         
         if not os.path.exists(self.srt_path.get()):
-            messagebox.showerror("错误", "选择的SRT文件不存在。")
+            messagebox.showerror("Error", "The selected SRT file does not exist.")
             return
         
         # Run in separate thread
@@ -342,8 +362,8 @@ class SubtitleGeneratorGUI:
         """Thread function for burning subtitles"""
         try:
             self.set_processing_state(True)
-            self.update_status("烧录字幕中...")
-            self.log_message("开始烧录字幕...")
+            self.update_status("Burning subtitles...")
+            self.log_message("Start burning subtitles...")
             
             # Create writer
             writer = WriteSubtitle()
@@ -355,7 +375,7 @@ class SubtitleGeneratorGUI:
                 f"{video_name}_cn_hardsub.mp4"
             )
             
-            self.log_message(f"输出视频将保存到: {output_video_path}")
+            self.log_message(f"Output video will be saved to: {output_video_path}")
             
             # Burn subtitles
             success = writer.burn_subtitles(
@@ -365,18 +385,18 @@ class SubtitleGeneratorGUI:
             )
             
             if success:
-                self.log_message("字幕烧录完成")
-                self.update_status("烧录完成")
-                messagebox.showinfo("成功", f"带字幕的视频已保存到:\n{output_video_path}")
+                self.log_message("Subtitle burning completed")
+                self.update_status("Burning completed")
+                messagebox.showinfo("Success", f"Video with subtitles saved to:\n{output_video_path}")
             else:
-                self.log_message("字幕烧录失败")
-                self.update_status("烧录失败")
-                messagebox.showerror("错误", "字幕烧录失败。请查看日志了解详情。")
+                self.log_message("Subtitle burning failed")
+                self.update_status("Burning failed")
+                messagebox.showerror("Error", "Subtitle burning failed. Please check logs.")
                 
         except Exception as e:
-            self.log_message(f"错误: {str(e)}")
-            self.update_status("发生错误")
-            messagebox.showerror("错误", f"发生错误: {str(e)}")
+            self.log_message(f"Error: {str(e)}")
+            self.update_status("Error occurred")
+            messagebox.showerror("Error", f"Error occurred: {str(e)}")
         finally:
             self.set_processing_state(False)
     
@@ -387,16 +407,91 @@ class SubtitleGeneratorGUI:
         self.output_dir.set(os.getcwd())
         self.selected_model.set("medium")
         self.log_text.delete(1.0, tk.END)
-        self.update_status("就绪")
+        self.update_status("Ready")
         
         # Add initial log message back
         device = "CUDA GPU" if torch.cuda.is_available() else "CPU"
-        self.log_message("GUI重置成功")
-        self.log_message(f"处理设备: {device}")
+        self.log_message("GUI reset successfully")
+        self.log_message(f"Processing device: {device}")
         if torch.cuda.is_available():
             self.log_message(f"GPU: {torch.cuda.get_device_name(0)}")
         else:
-            self.log_message("使用CPU进行处理")
+            self.log_message("Using CPU for processing")
+    
+    def check_system_requirements(self):
+        """Check system requirements for Windows"""
+        issues = []
+        
+        # Check Python version
+        if sys.version_info < (3, 9):
+            issues.append("Python version is too low, Python 3.9 or later is required")
+        
+        # Check FFmpeg
+        try:
+            result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+            if result.returncode != 0:
+                issues.append("FFmpeg not found or not runnable")
+        except FileNotFoundError:
+            issues.append("FFmpeg is not installed or not in PATH")
+        
+        # Check required packages
+        try:
+            import whisper
+            import googletrans
+        except ImportError as e:
+            issues.append(f"Missing required Python package: {e}")
+        
+        # Show warnings if any issues found
+        if issues:
+            warning_text = "Detected the following issues:\n\n" + "\n".join(f"• {issue}" for issue in issues)
+            warning_text += "\n\nPlease run install.bat to resolve these issues."
+            messagebox.showwarning("System Check", warning_text)
+    
+    def show_help(self):
+        """Show help dialog with usage instructions"""
+        help_text = """
+Usage:
+
+1. Select a video file
+   - Supported formats: MP4, MKV, AVI, MOV, WMV, FLV
+   - Clear audio yields better recognition quality
+
+2. Choose a Whisper model
+   - tiny/base: Fast but lower accuracy
+   - small/medium: Balanced speed and accuracy (recommended)
+   - large/large-v2/large-v3: Higher accuracy but slower
+
+3. Generate subtitles
+   - Click "Generate Subtitles" to start
+   - Processing time depends on video length and model
+   - The generated SRT will be saved in the output directory
+
+4. Burn subtitles
+   - Select the generated SRT file
+   - Click "Burn Subtitles to Video"
+   - The new video will include hardcoded Chinese subtitles
+
+Notes:
+• First run downloads the Whisper model; internet required
+• GPU is much faster than CPU; consider installing CUDA
+• Ensure enough disk space for temporary files
+• Be patient with large files
+
+Troubleshooting:
+• Check system requirements if errors occur
+• Ensure FFmpeg is properly installed
+• Check network connectivity (for translation service)
+        """
+        
+        help_window = tk.Toplevel(self.root)
+        help_window.title("Help")
+        help_window.geometry("600x500")
+        help_window.resizable(True, True)
+        
+        text_widget = scrolledtext.ScrolledText(help_window, wrap=tk.WORD, font=("Microsoft YaHei", 10))
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text_widget.insert(tk.END, help_text)
+        text_widget.config(state=tk.DISABLED)
 
 
 def main():

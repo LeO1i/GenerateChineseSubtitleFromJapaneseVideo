@@ -1,46 +1,49 @@
 @echo off
-echo Japanese Video Subtitle Generator
-echo =================================
-echo.
-echo Starting GUI...
+chcp 65001 >nul
+echo Japanese Subtitle Generator
+echo ===================
 echo.
 
 REM Check if Python is available
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo Error: Python is not installed or not in PATH
-    echo Please install Python 3.9+ from https://python.org
+    echo Error: Python not found
+    echo Please run install.bat to install dependencies
+    echo.
     pause
     exit /b 1
 )
 
-REM Try to activate virtual environment if it exists
-if exist ".venv\Scripts\Activate.bat" (
-    echo Activating virtual environment...
-    call .venv\Scripts\Activate.bat
-    echo Virtual environment activated.
-) else if exist "venv\Scripts\Activate.bat" (
-    echo Activating virtual environment...
-    call venv\Scripts\Activate.bat
-    echo Virtual environment activated.
-) else (
-    echo No virtual environment found, using system Python.
-)
-
-REM Run the GUI
-python gui.py
-
-REM If GUI fails, show error
+REM Check if required packages are installed
+python -c "import whisper, googletrans, torch" >nul 2>&1
 if errorlevel 1 (
-    echo.
-    echo Error: GUI failed to start.
-    echo Please check that all dependencies are installed:
-    echo pip install -r requirements.txt
-    echo.
-    pause
-    exit /b 1
+    echo Missing required dependencies, installing...
+    pip install -r requirements.txt
+    if errorlevel 1 (
+        echo Dependency installation failed
+        echo Please run: pip install -r requirements.txt
+        pause
+        exit /b 1
+    )
 )
 
-echo.
-echo Press any key to exit...
-pause >nul
+REM Check if FFmpeg is available
+ffmpeg -version >nul 2>&1
+if errorlevel 1 (
+    echo Warning: FFmpeg not found
+    echo Please download and install FFmpeg from https://ffmpeg.org/download.html
+)
+
+echo Starting application...
+
+REM Launch GUI detached so this window can close without affecting the app
+REM Prefer pythonw (no console). Fallback to python if pythonw not available.
+where pythonw >nul 2>&1
+if %errorlevel%==0 (
+    start "" pythonw gui.py
+) else (
+    start "" python gui.py
+)
+
+REM Exit the launcher window now
+exit /b 0

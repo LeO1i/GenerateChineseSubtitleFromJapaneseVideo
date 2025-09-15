@@ -4,9 +4,3 @@ numpy>=1.23
 numba>=0.57
 tqdm>=4.65
 ffmpeg-python>=0.2.0
-# IMPORTANT: Install torch separately with the correct index-url (CPU or CUDA)
-# Example CPU:   pip install torch --index-url https://download.pytorch.org/whl/cpu
-# Example CUDA:  pip install torch --index-url https://download.pytorch.org/whl/cu121
-
-# GUI dependencies (tkinter is usually included with Python)
-# If tkinter is missing, install python-tk package on Linux or use Python from python.org on Windows
