@@ -60,3 +60,9 @@ If you encounter problems:
 
 - Video formats: MP4, MKV, AVI, MOV, WMV, FLV
 - Output formats: SRT subtitle files, MP4 video files (with hardsubs)
+
+
+##Plan
+Build a useable application for JP2ZH video subtitle generator [Finish]
+Change the Speech reganize model to Qwen3-ASR and translate model HY-MT1.5 [Pending]
+cont.
