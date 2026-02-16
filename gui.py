@@ -3,8 +3,6 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import os
 import sys
-from pathlib import Path
-import whisper
 import torch
 import subprocess
 from speech_extract import JapaneseVideoSubtitleGenerator
@@ -41,6 +39,28 @@ class SubtitleGeneratorGUI:
         ]
         
         self.setup_ui()
+
+    def _run_on_ui_thread(self, func, *args, wait=False):
+        """Run UI operations safely from worker threads."""
+        if threading.current_thread() is threading.main_thread():
+            return func(*args)
+
+        if not wait:
+            self.root.after(0, lambda: func(*args))
+            return None
+
+        done = threading.Event()
+        result = {"value": None}
+
+        def _wrapped():
+            try:
+                result["value"] = func(*args)
+            finally:
+                done.set()
+
+        self.root.after(0, _wrapped)
+        done.wait()
+        return result["value"]
         
     def on_closing(self):
         """Handle window close event"""
@@ -235,28 +255,45 @@ class SubtitleGeneratorGUI:
     
     def log_message(self, message):
         """Add message to log area"""
-        self.log_text.insert(tk.END, f"{message}\n")
-        self.log_text.see(tk.END)
-        self.root.update_idletasks()
+        def _update():
+            self.log_text.insert(tk.END, f"{message}\n")
+            self.log_text.see(tk.END)
+            self.root.update_idletasks()
+
+        self._run_on_ui_thread(_update, wait=True)
     
     def update_status(self, message):
         """Update status label"""
-        self.status_label.config(text=message)
-        self.root.update_idletasks()
+        def _update():
+            self.status_label.config(text=message)
+            self.root.update_idletasks()
+
+        self._run_on_ui_thread(_update, wait=True)
     
     def set_processing_state(self, processing):
         """Enable/disable buttons during processing"""
-        self.processing = processing
-        if processing:
-            self.generate_btn.config(state='disabled')
-            self.burn_btn.config(state='disabled')
-            self.clear_btn.config(state='disabled')
-            self.progress.start()
-        else:
-            self.generate_btn.config(state='normal')
-            self.burn_btn.config(state='normal')
-            self.clear_btn.config(state='normal')
-            self.progress.stop()
+        def _update():
+            self.processing = processing
+            if processing:
+                self.generate_btn.config(state='disabled')
+                self.burn_btn.config(state='disabled')
+                self.clear_btn.config(state='disabled')
+                self.progress.start()
+            else:
+                self.generate_btn.config(state='normal')
+                self.burn_btn.config(state='normal')
+                self.clear_btn.config(state='normal')
+                self.progress.stop()
+
+        self._run_on_ui_thread(_update, wait=True)
+
+    def show_info(self, title, message):
+        """Thread-safe info dialog."""
+        return self._run_on_ui_thread(messagebox.showinfo, title, message, wait=True)
+
+    def show_error(self, title, message):
+        """Thread-safe error dialog."""
+        return self._run_on_ui_thread(messagebox.showerror, title, message, wait=True)
     
     def validate_inputs(self):
         """Validate user inputs"""
@@ -300,11 +337,8 @@ class SubtitleGeneratorGUI:
             
             # Create generator with selected model
             self.log_message(f"Loading Whisper model: {self.selected_model.get()}")
-            generator = JapaneseVideoSubtitleGenerator()
-            
-            # Override the model loading to use selected model
-            generator.whisper_model = whisper.load_model(
-                self.selected_model.get(), 
+            generator = JapaneseVideoSubtitleGenerator(
+                model_name=self.selected_model.get(),
                 device="cuda:0" if torch.cuda.is_available() else "cpu"
             )
             
@@ -324,19 +358,19 @@ class SubtitleGeneratorGUI:
                 self.log_message("Note: Only Chinese lines will be burned when creating hardsubs")
                 
                 self.update_status("Subtitle generation completed")
-                messagebox.showinfo("Success", 
+                self.show_info("Success",
                     f"Subtitles generated successfully!\n\n"
                     f"Bilingual SRT (JA + ZH):\n{srt_path}\n\n"
                     f"Note: Burning uses Chinese-only lines")
             else:
                 self.log_message("Subtitle generation failed")
                 self.update_status("Subtitle generation failed")
-                messagebox.showerror("Error", "Subtitle generation failed. Please check logs.")
+                self.show_error("Error", "Subtitle generation failed. Please check logs.")
                 
         except Exception as e:
             self.log_message(f"Error: {str(e)}")
             self.update_status("Error occurred")
-            messagebox.showerror("Error", f"Error occurred: {str(e)}")
+            self.show_error("Error", f"Error occurred: {str(e)}")
         finally:
             self.set_processing_state(False)
     
@@ -387,16 +421,16 @@ class SubtitleGeneratorGUI:
             if success:
                 self.log_message("Subtitle burning completed")
                 self.update_status("Burning completed")
-                messagebox.showinfo("Success", f"Video with subtitles saved to:\n{output_video_path}")
+                self.show_info("Success", f"Video with subtitles saved to:\n{output_video_path}")
             else:
                 self.log_message("Subtitle burning failed")
                 self.update_status("Burning failed")
-                messagebox.showerror("Error", "Subtitle burning failed. Please check logs.")
+                self.show_error("Error", "Subtitle burning failed. Please check logs.")
                 
         except Exception as e:
             self.log_message(f"Error: {str(e)}")
             self.update_status("Error occurred")
-            messagebox.showerror("Error", f"Error occurred: {str(e)}")
+            self.show_error("Error", f"Error occurred: {str(e)}")
         finally:
             self.set_processing_state(False)
     

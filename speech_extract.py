@@ -9,10 +9,10 @@ import time
 from googletrans import Translator
 
 class JapaneseVideoSubtitleGenerator:
-    def __init__(self):
-        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        print("Loading Whisper model...")
-        self.whisper_model = whisper.load_model("small", device=self.device)
+    def __init__(self, model_name="small", device=None):
+        self.device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+        print(f"Loading Whisper model: {model_name} on {self.device}...")
+        self.whisper_model = whisper.load_model(model_name, device=self.device)
         self.translator = Translator()
 
     def extract_audio(self, video_path, audio_path):
@@ -93,7 +93,7 @@ class JapaneseVideoSubtitleGenerator:
         for segment in transcription_result['segments']:
             if segment['end'] - segment['start'] < 0.5:
                 continue
-            if hasattr(segment, 'confidence') and segment.get('confidence', 1.0) < 0.3:
+            if segment.get('confidence', 1.0) < 0.3:
                 continue
             
             if (processed_segments and 
@@ -139,7 +139,7 @@ class JapaneseVideoSubtitleGenerator:
     def process_video(self, video_path, output_dir=None):
         """Main function to process video and generate bilingual subtitles"""
         video_path = str(Path(video_path).resolve())
-        if not video_path.lower().endswith((".mp4", ".mkv", ".avi", ".mov")):
+        if not video_path.lower().endswith((".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv")):
             print(f"Error: {video_path} is not a supported video format")
             return False
 

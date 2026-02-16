@@ -1,5 +1,6 @@
 import os
 import subprocess
+import shutil
 
 class WriteSubtitle:
     def __init__(self):
@@ -26,43 +27,31 @@ class WriteSubtitle:
         print("Extracting Chinese subtitles from bilingual SRT...")
         try:
             with open(bilingual_srt_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
+                blocks = f.read().split('\n\n')
+
             chinese_lines = []
-            i = 0
-            while i < len(lines):
-                line = lines[i].strip()
-                
-                # Skip empty lines
-                if not line:
-                    i += 1
+            for block in blocks:
+                lines = [line for line in block.splitlines() if line.strip()]
+                if len(lines) < 3:
                     continue
-                
-                # Check if this is a subtitle number
-                if line.isdigit():
-                    chinese_lines.append(line + '\n')  # Subtitle number
-                    i += 1
-                    
-                    # Get timestamp line
-                    if i < len(lines):
-                        chinese_lines.append(lines[i])  # Timestamp
-                        i += 1
-                    
-                    # Get Chinese text (first text line)
-                    if i < len(lines):
-                        chinese_text = lines[i].strip()
-                        if chinese_text:
-                            chinese_lines.append(chinese_text + '\n')
-                        i += 1
-                    
-                    # Skip Japanese text (second text line)
-                    if i < len(lines):
-                        i += 1
-                    
-                    # Add empty line
-                    chinese_lines.append('\n')
-                else:
-                    i += 1
+
+                # Standard SRT block:
+                # 0: index
+                # 1: timestamp
+                # 2+: text lines
+                index_line = lines[0]
+                timestamp_line = lines[1]
+                text_lines = lines[2:]
+
+                # Generated bilingual format is JA first, ZH second.
+                # Keep second line when present; otherwise fallback to first line.
+                chinese_text = text_lines[1].strip() if len(text_lines) >= 2 else text_lines[0].strip()
+                if not chinese_text:
+                    continue
+
+                chinese_lines.append(index_line + '\n')
+                chinese_lines.append(timestamp_line + '\n')
+                chinese_lines.append(chinese_text + '\n\n')
             
             # Write Chinese-only SRT
             with open(chinese_only_srt_path, 'w', encoding='utf-8') as f:
@@ -109,7 +98,14 @@ class WriteSubtitle:
                 else:
                     print("Warning: Failed to extract Chinese subtitles, using original file")
             
-            ffmpeg_bin = 'C:/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe' #请把这里的地址改成你自己电脑里ffmpeg.exe的地址
+            ffmpeg_bin = shutil.which('ffmpeg')
+            if not ffmpeg_bin:
+                fallback_ffmpeg = 'C:/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe'
+                if os.path.exists(fallback_ffmpeg):
+                    ffmpeg_bin = fallback_ffmpeg
+                else:
+                    print("Burning fail: ffmpeg not found in PATH and fallback path does not exist")
+                    return False
             # Using POSIX style path
             srt_escaped = self._escape_path_for_ffmpeg_subtitles(srt_to_use)
 

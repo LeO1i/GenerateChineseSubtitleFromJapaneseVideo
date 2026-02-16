@@ -20,10 +20,10 @@ def main():
         output_video_path = os.path.join(output_dir, f"{video_name}_cn_hardsub.mp4")
         if writer.burn_subtitles(video_path, srt_path, output_video_path):
             print("Burned successfully.")
-            return -1
+            return 0
         else:
             print("Burn failed. Please check errors above.")
-            return -1
+            return 1
     else:
         pass
 
