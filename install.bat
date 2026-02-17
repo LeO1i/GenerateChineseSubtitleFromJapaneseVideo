@@ -22,21 +22,27 @@ if errorlevel 1 (
 
 echo Python found ✓
 
-REM Install PyTorch (CPU version for Windows)
+REM Install PyTorch (prefer CUDA build; fallback to CPU if needed)
 echo.
-echo Installing PyTorch (CPU build)...
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+echo Installing PyTorch CUDA build (cu128)...
+pip uninstall -y torch torchvision torchaudio >nul 2>&1
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 if errorlevel 1 (
-    echo PyTorch installation failed
-    pause
-    exit /b 1
+    echo CUDA PyTorch installation failed, falling back to default PyTorch...
+    pip install torch
+    if errorlevel 1 (
+        echo PyTorch installation failed
+        pause
+        exit /b 1
+    )
+    echo Warning: Installed fallback PyTorch package (may be CPU-only).
 )
 
 echo PyTorch installed ✓
 
 REM Install other dependencies
 echo.
-echo Installing other dependencies...
+echo Installing Hugging Face dependencies...
 pip install -r requirements.txt
 if errorlevel 1 (
     echo Dependency installation failed
@@ -45,6 +51,17 @@ if errorlevel 1 (
 )
 
 echo Dependencies installed ✓
+
+echo.
+echo Verifying key imports...
+python -c "import torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr" >nul 2>&1
+if errorlevel 1 (
+    echo Import check failed. Please run: pip install -r requirements.txt
+    pause
+    exit /b 1
+)
+echo Import check passed ✓
+python -c "import torch; print('Torch version:', torch.__version__); print('CUDA available:', torch.cuda.is_available()); print('Torch CUDA:', torch.version.cuda)"
 
 REM Check FFmpeg
 echo.

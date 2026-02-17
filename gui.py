@@ -5,6 +5,7 @@ import os
 import sys
 import torch
 import subprocess
+from ffmpeg_utils import subprocess_kwargs as _subprocess_kwargs
 from speech_extract import JapaneseVideoSubtitleGenerator
 from write_sutitle import WriteSubtitle
 
@@ -27,15 +28,26 @@ class SubtitleGeneratorGUI:
         self.video_path = tk.StringVar()
         self.srt_path = tk.StringVar()
         self.output_dir = tk.StringVar()
-        self.selected_model = tk.StringVar(value="medium")
+        self.selected_asr_model = tk.StringVar(value="Qwen/Qwen3-ASR-1.7B")
+        self.selected_mt_model = tk.StringVar(value="tencent/HY-MT1.5-1.8B")
+        self.chunk_size_seconds = tk.StringVar(value="120")
+        self.overlap_seconds = tk.StringVar(value="1.5")
+        self.quality_mode = tk.StringVar(value="fast")
+        self.glossary_path = tk.StringVar()
+        self.use_advanced_mt = tk.BooleanVar(value=False)
+        # Default preference is GPU; runtime falls back to CPU if CUDA is unavailable.
+        self.device_preference = tk.StringVar(value="cuda:0")
         self.processing = False
         
         # Check system requirements on startup
         self.check_system_requirements()
         
-        # Available Whisper models
-        self.whisper_models = [
-            "tiny", "base", "small", "medium", "large", "large-v2", "large-v3"
+        # Available model presets
+        self.asr_models = [
+            "Qwen/Qwen3-ASR-1.7B",
+        ]
+        self.mt_models = [
+            "tencent/HY-MT1.5-1.8B",
         ]
         
         self.setup_ui()
@@ -95,8 +107,8 @@ class SubtitleGeneratorGUI:
         system_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 15))
         
         # GPU/CPU status
-        device = "CUDA GPU" if torch.cuda.is_available() else "CPU"
-        device_info = f"Processing device: {device}"
+        active_device = "CUDA GPU" if torch.cuda.is_available() else "CPU (fallback)"
+        device_info = f"Device preference: CUDA GPU (default) | Active: {active_device}"
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(0)
             device_info += f" ({gpu_name})"
@@ -133,24 +145,72 @@ class SubtitleGeneratorGUI:
         ttk.Entry(main_frame, textvariable=self.output_dir, width=50, font=("Microsoft YaHei", 9)).grid(row=4, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
         ttk.Button(main_frame, text="Browse", command=self.browse_output_dir, style="TButton").grid(row=4, column=2, pady=5)
         
-        # Whisper model selection
-        ttk.Label(main_frame, text="Whisper model:", font=("Microsoft YaHei", 9)).grid(row=5, column=0, sticky=tk.W, pady=5)
-        model_combo = ttk.Combobox(main_frame, textvariable=self.selected_model, 
-                                  values=self.whisper_models, state="readonly", width=20, font=("Microsoft YaHei", 9))
-        model_combo.grid(row=5, column=1, sticky=tk.W, padx=(5, 5), pady=5)
-        
-        # Model info
-        model_info = ttk.Label(main_frame, text="Larger model = better accuracy but slower", 
-                              font=("Microsoft YaHei", 8), foreground="gray")
-        model_info.grid(row=5, column=2, sticky=tk.W, pady=5)
+        # ASR model selection
+        ttk.Label(main_frame, text="ASR model:", font=("Microsoft YaHei", 9)).grid(row=5, column=0, sticky=tk.W, pady=5)
+        asr_combo = ttk.Combobox(
+            main_frame,
+            textvariable=self.selected_asr_model,
+            values=self.asr_models,
+            state="readonly",
+            width=36,
+            font=("Microsoft YaHei", 9),
+        )
+        asr_combo.grid(row=5, column=1, sticky=tk.W, padx=(5, 5), pady=5)
+
+        # MT model selection
+        ttk.Label(main_frame, text="MT model:", font=("Microsoft YaHei", 9)).grid(row=6, column=0, sticky=tk.W, pady=5)
+        mt_combo = ttk.Combobox(
+            main_frame,
+            textvariable=self.selected_mt_model,
+            values=self.mt_models,
+            state="readonly",
+            width=36,
+            font=("Microsoft YaHei", 9),
+        )
+        mt_combo.grid(row=6, column=1, sticky=tk.W, padx=(5, 5), pady=5)
+
+        ttk.Checkbutton(
+            main_frame,
+            text="Enable advanced MT fallback chain (try 7B first)",
+            variable=self.use_advanced_mt,
+        ).grid(row=6, column=2, sticky=tk.W, pady=5)
+
+        # Chunk and quality settings
+        ttk.Label(main_frame, text="Chunk size (30-600s):", font=("Microsoft YaHei", 9)).grid(row=7, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.chunk_size_seconds, width=10, font=("Microsoft YaHei", 9)).grid(
+            row=7, column=1, sticky=tk.W, padx=(5, 5), pady=5
+        )
+        ttk.Label(main_frame, text="Default: 120", font=("Microsoft YaHei", 8), foreground="gray").grid(
+            row=7, column=2, sticky=tk.W, pady=5
+        )
+
+        ttk.Label(main_frame, text="Overlap seconds:", font=("Microsoft YaHei", 9)).grid(row=8, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.overlap_seconds, width=10, font=("Microsoft YaHei", 9)).grid(
+            row=8, column=1, sticky=tk.W, padx=(5, 5), pady=5
+        )
+        ttk.Combobox(
+            main_frame,
+            textvariable=self.quality_mode,
+            values=["fast", "accurate"],
+            state="readonly",
+            width=12,
+            font=("Microsoft YaHei", 9),
+        ).grid(row=8, column=2, sticky=tk.W, pady=5)
+
+        # Optional glossary
+        ttk.Label(main_frame, text="Glossary file (optional):", font=("Microsoft YaHei", 9)).grid(row=9, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.glossary_path, width=50, font=("Microsoft YaHei", 9)).grid(
+            row=9, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5
+        )
+        ttk.Button(main_frame, text="Browse", command=self.browse_glossary, style="TButton").grid(row=9, column=2, pady=5)
         
         # Separator
         separator = ttk.Separator(main_frame, orient='horizontal')
-        separator.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=20)
+        separator.grid(row=10, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=20)
         
         # Action buttons frame
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=7, column=0, columnspan=3, pady=10)
+        button_frame.grid(row=11, column=0, columnspan=3, pady=10)
         
         # Generate subtitles button
         self.generate_btn = ttk.Button(button_frame, text="Generate Subtitles", 
@@ -168,40 +228,33 @@ class SubtitleGeneratorGUI:
         self.clear_btn.pack(side=tk.LEFT, padx=5)
         
         # Progress bar
-        self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
-        self.progress.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        self.progress = ttk.Progressbar(main_frame, mode='determinate', maximum=100)
+        self.progress.grid(row=12, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Status label
         self.status_label = ttk.Label(main_frame, text="Ready", font=("Microsoft YaHei", 10))
-        self.status_label.grid(row=9, column=0, columnspan=3, pady=5)
+        self.status_label.grid(row=13, column=0, columnspan=3, pady=5)
         
         # Log area
-        ttk.Label(main_frame, text="Processing log:", font=("Microsoft YaHei", 9)).grid(row=10, column=0, sticky=tk.W, pady=(20, 5))
+        ttk.Label(main_frame, text="Processing log:", font=("Microsoft YaHei", 9)).grid(row=14, column=0, sticky=tk.W, pady=(20, 5))
         
         # Scrolled text for logs
         self.log_text = scrolledtext.ScrolledText(main_frame, height=15, width=80, font=("Microsoft YaHei", 9))
-        self.log_text.grid(row=11, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        self.log_text.grid(row=15, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         
         # Configure grid weights for log area
-        main_frame.rowconfigure(11, weight=1)
+        main_frame.rowconfigure(15, weight=1)
         
         # Initialize output directory to current directory
         self.output_dir.set(os.getcwd())
         
         # Add initial log message
         self.log_message("GUI initialized successfully")
-        self.log_message(f"Processing device: {device}")
-        if torch.cuda.is_available():
-            self.log_message(f"GPU: {torch.cuda.get_device_name(0)}")
-            cuda_version = torch.version.cuda if hasattr(torch.version, 'cuda') else "Unknown"
-            self.log_message(f"CUDA version: {cuda_version}")
-        else:
-            self.log_message("Using CPU for processing")
-            self.log_message("Tip: For GPU acceleration, install the CUDA build of PyTorch")
+        self._log_device_info()
         
         # Show help button
         help_btn = ttk.Button(main_frame, text="Help", command=self.show_help)
-        help_btn.grid(row=12, column=0, columnspan=3, pady=10)
+        help_btn.grid(row=16, column=0, columnspan=3, pady=10)
         
     def browse_video(self):
         """Browse for video file"""
@@ -252,6 +305,19 @@ class SubtitleGeneratorGUI:
         )
         if directory:
             self.output_dir.set(directory)
+
+    def browse_glossary(self):
+        """Browse for optional glossary file"""
+        filetypes = [
+            ("Text files", "*.txt *.tsv *.csv"),
+            ("All files", "*.*"),
+        ]
+        filename = filedialog.askopenfilename(
+            title="Select glossary file",
+            filetypes=filetypes,
+        )
+        if filename:
+            self.glossary_path.set(filename)
     
     def log_message(self, message):
         """Add message to log area"""
@@ -278,12 +344,27 @@ class SubtitleGeneratorGUI:
                 self.generate_btn.config(state='disabled')
                 self.burn_btn.config(state='disabled')
                 self.clear_btn.config(state='disabled')
-                self.progress.start()
+                self.progress.configure(value=0)
             else:
                 self.generate_btn.config(state='normal')
                 self.burn_btn.config(state='normal')
                 self.clear_btn.config(state='normal')
-                self.progress.stop()
+                self.progress.configure(value=100)
+
+        self._run_on_ui_thread(_update, wait=True)
+
+    def reset_progress(self):
+        def _update():
+            self.progress.configure(value=0)
+
+        self._run_on_ui_thread(_update, wait=True)
+
+    def update_progress(self, value, message=None):
+        def _update():
+            self.progress.configure(value=max(0.0, min(100.0, float(value))))
+            if message:
+                self.status_label.config(text=message)
+            self.root.update_idletasks()
 
         self._run_on_ui_thread(_update, wait=True)
 
@@ -315,7 +396,28 @@ class SubtitleGeneratorGUI:
             except Exception as e:
                 messagebox.showerror("Error", f"Cannot create output directory: {e}")
                 return False
-        
+
+        try:
+            chunk_size = int(self.chunk_size_seconds.get().strip())
+            if chunk_size < 30 or chunk_size > 600:
+                raise ValueError("Chunk size must be 30-600")
+        except Exception:
+            messagebox.showerror("Error", "Chunk size must be an integer between 30 and 600.")
+            return False
+
+        try:
+            overlap = float(self.overlap_seconds.get().strip())
+            if overlap < 0 or overlap > 10:
+                raise ValueError("Overlap must be 0-10")
+        except Exception:
+            messagebox.showerror("Error", "Overlap seconds must be a number between 0 and 10.")
+            return False
+
+        glossary_file = self.glossary_path.get().strip()
+        if glossary_file and not os.path.exists(glossary_file):
+            messagebox.showerror("Error", "Glossary file does not exist.")
+            return False
+
         return True
     
     def generate_subtitles(self):
@@ -332,26 +434,39 @@ class SubtitleGeneratorGUI:
         """Thread function for subtitle generation"""
         try:
             self.set_processing_state(True)
+            self.reset_progress()
             self.update_status("Initializing...")
             self.log_message("Start generating subtitles...")
             
-            # Create generator with selected model
-            self.log_message(f"Loading Whisper model: {self.selected_model.get()}")
+            # Create generator with selected models
+            self.log_message(f"Loading ASR model: {self.selected_asr_model.get()}")
+            self.log_message(f"Loading MT model: {self.selected_mt_model.get()}")
             generator = JapaneseVideoSubtitleGenerator(
-                model_name=self.selected_model.get(),
-                device="cuda:0" if torch.cuda.is_available() else "cpu"
+                asr_model_id=self.selected_asr_model.get(),
+                mt_model_id=self.selected_mt_model.get(),
+                use_advanced_mt=self.use_advanced_mt.get(),
+                quality_mode=self.quality_mode.get(),
+                glossary_path=self.glossary_path.get().strip() or None,
+                device=self.device_preference.get(),
+                progress_callback=self.update_progress,
             )
             
             self.log_message("Model loaded successfully")
             
             # Process video
             self.update_status("Processing video...")
-            srt_path = generator.process_video_to_srt(
-                self.video_path.get(), 
-                self.output_dir.get()
+            self.update_progress(5, "Processing video...")
+            srt_path = generator.process_video(
+                self.video_path.get(),
+                self.output_dir.get(),
+                chunk_size_seconds=int(self.chunk_size_seconds.get().strip()),
+                overlap_seconds=float(self.overlap_seconds.get().strip()),
+                quality_mode=self.quality_mode.get(),
+                glossary_path=self.glossary_path.get().strip() or None,
             )
             
             if srt_path:
+                self.update_progress(100, "Subtitle generation completed")
                 self.srt_path.set(srt_path)
                 self.log_message("Subtitle generation completed!")
                 self.log_message(f"Bilingual SRT file: {srt_path}")
@@ -396,7 +511,9 @@ class SubtitleGeneratorGUI:
         """Thread function for burning subtitles"""
         try:
             self.set_processing_state(True)
+            self.reset_progress()
             self.update_status("Burning subtitles...")
+            self.update_progress(10, "Preparing subtitle burn...")
             self.log_message("Start burning subtitles...")
             
             # Create writer
@@ -419,10 +536,12 @@ class SubtitleGeneratorGUI:
             )
             
             if success:
+                self.update_progress(100, "Burning completed")
                 self.log_message("Subtitle burning completed")
                 self.update_status("Burning completed")
                 self.show_info("Success", f"Video with subtitles saved to:\n{output_video_path}")
             else:
+                self.update_progress(100, "Burning failed")
                 self.log_message("Subtitle burning failed")
                 self.update_status("Burning failed")
                 self.show_error("Error", "Subtitle burning failed. Please check logs.")
@@ -439,18 +558,20 @@ class SubtitleGeneratorGUI:
         self.video_path.set("")
         self.srt_path.set("")
         self.output_dir.set(os.getcwd())
-        self.selected_model.set("medium")
+        self.selected_asr_model.set("Qwen/Qwen3-ASR-1.7B")
+        self.selected_mt_model.set("tencent/HY-MT1.5-1.8B")
+        self.chunk_size_seconds.set("120")
+        self.overlap_seconds.set("1.5")
+        self.quality_mode.set("fast")
+        self.glossary_path.set("")
+        self.use_advanced_mt.set(False)
+        self.device_preference.set("cuda:0")
         self.log_text.delete(1.0, tk.END)
         self.update_status("Ready")
         
         # Add initial log message back
-        device = "CUDA GPU" if torch.cuda.is_available() else "CPU"
         self.log_message("GUI reset successfully")
-        self.log_message(f"Processing device: {device}")
-        if torch.cuda.is_available():
-            self.log_message(f"GPU: {torch.cuda.get_device_name(0)}")
-        else:
-            self.log_message("Using CPU for processing")
+        self._log_device_info()
     
     def check_system_requirements(self):
         """Check system requirements for Windows"""
@@ -462,7 +583,8 @@ class SubtitleGeneratorGUI:
         
         # Check FFmpeg
         try:
-            result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+            run_kwargs = {"capture_output": True, "text": True, **_subprocess_kwargs()}
+            result = subprocess.run(['ffmpeg', '-version'], **run_kwargs)
             if result.returncode != 0:
                 issues.append("FFmpeg not found or not runnable")
         except FileNotFoundError:
@@ -470,8 +592,7 @@ class SubtitleGeneratorGUI:
         
         # Check required packages
         try:
-            import whisper
-            import googletrans
+            import transformers
         except ImportError as e:
             issues.append(f"Missing required Python package: {e}")
         
@@ -481,6 +602,18 @@ class SubtitleGeneratorGUI:
             warning_text += "\n\nPlease run install.bat to resolve these issues."
             messagebox.showwarning("System Check", warning_text)
     
+    def _log_device_info(self):
+        """Log device/GPU information to the log area."""
+        self.log_message("Device preference: CUDA GPU (cuda:0)")
+        if torch.cuda.is_available():
+            self.log_message("Active device: CUDA GPU")
+            self.log_message(f"GPU: {torch.cuda.get_device_name(0)}")
+            cuda_version = torch.version.cuda if hasattr(torch.version, 'cuda') else "Unknown"
+            self.log_message(f"CUDA version: {cuda_version}")
+        else:
+            self.log_message("Active device: CPU fallback")
+            self.log_message("Tip: For GPU acceleration, install the CUDA build of PyTorch")
+
     def show_help(self):
         """Show help dialog with usage instructions"""
         help_text = """
@@ -490,14 +623,16 @@ Usage:
    - Supported formats: MP4, MKV, AVI, MOV, WMV, FLV
    - Clear audio yields better recognition quality
 
-2. Choose a Whisper model
-   - tiny/base: Fast but lower accuracy
-   - small/medium: Balanced speed and accuracy (recommended)
-   - large/large-v2/large-v3: Higher accuracy but slower
+2. Select model and quality options
+   - ASR defaults to Qwen3-ASR-1.7B
+   - MT defaults to HY-MT compatible path (ja->zh)
+   - Quality: fast or accurate
+   - Chunk size must be 30-600 seconds (default 120)
+   - Overlap defaults to 1.5 seconds
 
 3. Generate subtitles
    - Click "Generate Subtitles" to start
-   - Processing time depends on video length and model
+   - Processing time depends on video length, chunk size, and model
    - The generated SRT will be saved in the output directory
 
 4. Burn subtitles
@@ -506,7 +641,7 @@ Usage:
    - The new video will include hardcoded Chinese subtitles
 
 Notes:
-• First run downloads the Whisper model; internet required
+• First run downloads models from Hugging Face; internet required
 • GPU is much faster than CPU; consider installing CUDA
 • Ensure enough disk space for temporary files
 • Be patient with large files
@@ -514,7 +649,7 @@ Notes:
 Troubleshooting:
 • Check system requirements if errors occur
 • Ensure FFmpeg is properly installed
-• Check network connectivity (for translation service)
+• Check network connectivity (for model download)
         """
         
         help_window = tk.Toplevel(self.root)

@@ -1,68 +1,107 @@
-# Japanese Subtitle Generator (Windows)
+# 日语视频中文字幕生成器（Windows）
 
-This is a Japanese video subtitle generator for Windows. It extracts audio from Japanese videos, generates Japanese subtitles using Whisper, and translates them into Chinese to produce a bilingual SRT.
+这个项目用于从日语视频自动生成双语字幕（`日语 + 中文`），并支持把**中文字幕硬字幕**烧录进视频。
 
-## System Requirements
+当前版本基于 Hugging Face 模型流程：
+- 默认语音识别（ASR）：`Qwen/Qwen3-ASR-1.7B`
+- 默认机器翻译（MT）：`tencent/HY-MT1.5-1.8B`
+- 可选高级翻译链路：优先尝试 7B 级模型，失败后自动回退
 
-- Windows 10/11
-- Python 3.9 or later
-- FFmpeg (for video processing)
+## 功能概览
 
-## Installation
+- 从视频提取音频并进行日语语音识别
+- 将识别结果翻译为中文，输出双语 `.srt`
+- 支持按分块处理长视频（可断点续跑）
+- 支持可选术语表（glossary）增强翻译一致性
+- 支持将中文字幕烧录为硬字幕视频
+- 提供 GUI（推荐）和 CLI 两种使用方式
 
-1. Install Python 3.9+
-   - Download from https://python.org and install
-   - Check "Add Python to PATH" during installation
+## 环境要求
 
-2. Install FFmpeg
-   - Download Windows build from https://ffmpeg.org/download.html
-   - Extract to `C:\\ffmpeg\\`
-   - Add `C:\\ffmpeg\\bin` to the system PATH
+- Windows 10 / 11
+- Python 3.9 及以上
+- FFmpeg（已加入 PATH，或安装在 `C:\ffmpeg\...`）
+- 建议使用 NVIDIA GPU（支持 CPU 回退，但速度明显更慢）
 
-3. Install dependencies
-   - Double-click `install.bat` to auto-install
-   - Or run: `pip install -r requirements.txt`
+## 安装步骤
 
-## Usage
+1. 安装 Python 3.9+（勾选 `Add Python to PATH`）
+2. 安装 FFmpeg：https://ffmpeg.org/download.html
+3. 安装依赖（推荐）：
+   - 双击运行 `install.bat`
+   - 脚本会优先安装 CUDA 版 PyTorch，失败时自动回退
+4. 或手动安装：
+   - `pip install -r requirements.txt`
 
-1. Double-click `run.bat` to start the GUI
-2. Select a Japanese video file to process
-3. Choose a Whisper model (medium recommended)
-4. Click "Generate Subtitles"
-5. After processing, a bilingual SRT (JA + ZH) will be created
+## 启动方式
 
-## Files
+### 方式一：GUI（推荐）
 
-- `gui.py` - GUI application
-- `main.py` - Command-line version
-- `speech_extract.py` - Speech recognition and subtitle generation
-- `write_sutitle.py` - Burn subtitles to video
-- `llmtranslate.py` - LLM translation example
-- `install.bat` - Automatic installer
-- `run.bat` - Start script
+运行：
+- 双击 `run.bat`
 
-## Notes
+GUI 中可配置：
+- 视频文件、输出目录
+- ASR/MT 模型
+- 分块时长（30-600 秒，默认 120）
+- 分块重叠（默认 1.5 秒）
+- 质量模式（`fast` / `accurate`）
+- 可选术语表文件（支持 `.txt/.tsv/.csv`）
+- 可选高级翻译回退链路
 
-- First run downloads the Whisper model; internet required
-- Processing time depends on video length and selected model
-- Clear audio improves recognition quality
-- You can edit the generated SRT before burning it into the video
+使用步骤：
+1. 选择视频与输出目录
+2. 根据需要调整参数
+3. 点击 `Generate Subtitles` 生成双语字幕
+4. 如需硬字幕，点击 `Burn Subtitles to Video`
 
-## Troubleshooting
+### 方式二：CLI
 
-If you encounter problems:
-1. Ensure Python and FFmpeg are correctly installed
-2. Check your internet connection (first run downloads the model)
-3. Try re-running `install.bat`
-4. Check if the video file format is supported
+运行：
+- `python main.py`
 
-## Supported Formats
+CLI 会交互询问：
+- ASR/MT 模型
+- 是否启用高级翻译回退
+- 质量模式
+- 分块时长与重叠时长
+- 术语表路径（可选）
+- 视频路径
 
-- Video formats: MP4, MKV, AVI, MOV, WMV, FLV
-- Output formats: SRT subtitle files, MP4 video files (with hardsubs)
+## 长视频与断点续跑
 
+- 音频会按分块处理，并在块之间保留重叠，减少断句误差
+- 每个视频会生成对应检查点目录：`<video_name>_checkpoints`
+- 如果中途中断，重新运行后会自动续跑已完成分块
+- 最终输出时会自动映射回全局时间轴，生成完整 `.srt`
 
-##Plan
-Build a useable application for JP2ZH video subtitle generator [Finish]
-Change the Speech reganize model to Qwen3-ASR and translate model HY-MT1.5 [Pending]
-cont.
+## 输出说明
+
+- 生成字幕为双语格式：
+  - 第 1 行：日语
+  - 第 2 行：中文
+- 烧录硬字幕时，仅提取中文行写入视频
+- 默认硬字幕输出名：`<video_name>_cn_hardsub.mp4`
+
+## 性能建议
+
+- 首次运行会下载模型权重，需要联网
+- 30 分钟以上视频强烈建议 GPU
+- 显存/内存不足时，优先减小分块时长（建议从 120 调小和new_token_size）或换成更小的模型
+- 如果高级 MT 加载失败，程序会自动回退到更轻量翻译模型
+
+## 常见问题排查
+
+1. **依赖问题**：重新运行 `install.bat`
+2. **找不到 FFmpeg**：确认 `ffmpeg -version` 可执行
+3. **首次运行报模型错误**：检查网络连接后重试
+4. **速度过慢**：确认 PyTorch 已启用 CUDA（不是 CPU-only）
+5. **内存不足**：减小分块时长，或切换 `fast` 模式
+
+**开发环境**
+CPU：AMD 9700x
+GPU: NVIDA 5070Ti 16GB RAM (建议使用12GB RAM GPU)
+RAM: 32GB
+OS: Windows 11
+CUDA: 12.8
+

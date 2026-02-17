@@ -1,6 +1,7 @@
-openai-whisper==20231117
-googletrans==4.0.0rc1
-numpy>=1.23
-numba>=0.57
-tqdm>=4.65
-ffmpeg-python>=0.2.0
+torch>=2.1
+transformers>=4.40
+accelerate>=0.28
+tokenizers>=0.15
+safetensors>=0.4
+sentencepiece>=0.1.99
+qwen-asr>=0.0.6

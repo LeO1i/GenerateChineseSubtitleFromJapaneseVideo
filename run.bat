@@ -15,7 +15,7 @@ if errorlevel 1 (
 )
 
 REM Check if required packages are installed
-python -c "import whisper, googletrans, torch" >nul 2>&1
+python -c "import torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr" >nul 2>&1
 if errorlevel 1 (
     echo Missing required dependencies, installing...
     pip install -r requirements.txt

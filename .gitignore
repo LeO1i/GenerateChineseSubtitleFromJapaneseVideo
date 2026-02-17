@@ -4,3 +4,4 @@ test_gui.py
 *.srt
 UIrelated
 llmtranslate.py
+*.json

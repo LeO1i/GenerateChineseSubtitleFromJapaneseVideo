@@ -1,11 +1,13 @@
 import os
 import subprocess
-import shutil
+
+from ffmpeg_utils import find_ffmpeg, subprocess_kwargs
+
 
 class WriteSubtitle:
     def __init__(self):
         pass
-    
+
     def _escape_path_for_ffmpeg_subtitles(self, path):
         """
         Return a POSIX-style absolute path for FFmpeg subtitles filter with escaped specials.
@@ -29,19 +31,20 @@ class WriteSubtitle:
             with open(bilingual_srt_path, 'r', encoding='utf-8') as f:
                 blocks = f.read().split('\n\n')
 
-            chinese_lines = []
+            chinese_blocks = []
             for block in blocks:
                 lines = [line for line in block.splitlines() if line.strip()]
-                if len(lines) < 3:
+                if len(lines) < 2:
                     continue
 
                 # Standard SRT block:
                 # 0: index
                 # 1: timestamp
                 # 2+: text lines
-                index_line = lines[0]
                 timestamp_line = lines[1]
                 text_lines = lines[2:]
+                if not text_lines:
+                    continue
 
                 # Generated bilingual format is JA first, ZH second.
                 # Keep second line when present; otherwise fallback to first line.
@@ -49,13 +52,14 @@ class WriteSubtitle:
                 if not chinese_text:
                     continue
 
-                chinese_lines.append(index_line + '\n')
-                chinese_lines.append(timestamp_line + '\n')
-                chinese_lines.append(chinese_text + '\n\n')
+                chinese_blocks.append((timestamp_line, chinese_text))
             
             # Write Chinese-only SRT
             with open(chinese_only_srt_path, 'w', encoding='utf-8') as f:
-                f.writelines(chinese_lines)
+                for idx, (timestamp_line, chinese_text) in enumerate(chinese_blocks, start=1):
+                    f.write(f"{idx}\n")
+                    f.write(f"{timestamp_line}\n")
+                    f.write(f"{chinese_text}\n\n")
             
             print(f"Chinese-only SRT extracted: {chinese_only_srt_path}")
             return chinese_only_srt_path
@@ -98,20 +102,20 @@ class WriteSubtitle:
                 else:
                     print("Warning: Failed to extract Chinese subtitles, using original file")
             
-            ffmpeg_bin = shutil.which('ffmpeg')
-            if not ffmpeg_bin:
-                fallback_ffmpeg = 'C:/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe'
-                if os.path.exists(fallback_ffmpeg):
-                    ffmpeg_bin = fallback_ffmpeg
-                else:
-                    print("Burning fail: ffmpeg not found in PATH and fallback path does not exist")
-                    return False
+            ffmpeg_bin = find_ffmpeg()
             # Using POSIX style path
             srt_escaped = self._escape_path_for_ffmpeg_subtitles(srt_to_use)
 
             safe_font = font_name.replace("'", "\'")
+            # 15% smaller than previous 28.
+            font_size = 24
+            # Lock subtitles to the lower half and near the bottom.
+            # Use a conservative fixed margin so libass keeps bottom placement.
+            margin_v = 40
             force_style = (
-                f"'FontName={safe_font},FontSize=28,BorderStyle=3,Outline=2,Shadow=0,OutlineColour=&H80000000&,MarginV=36'"
+                f"'FontName={safe_font},FontSize={font_size},Alignment=2,BorderStyle=1,"
+                f"PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
+                f"Outline=2,Shadow=0,MarginV={margin_v}'"
             )
 
             vf_arg = f"subtitles=filename='{srt_escaped}':charenc=UTF-8:force_style={force_style}"
@@ -128,7 +132,7 @@ class WriteSubtitle:
                 output_path,
                 '-y'
             ]
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True, **subprocess_kwargs())
             print(f"Burning finished: {output_path}")
             
             # Clean up temporary file
