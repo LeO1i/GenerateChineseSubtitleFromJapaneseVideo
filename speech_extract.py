@@ -26,10 +26,13 @@ except ImportError:
 class ASREngine:
     DEFAULT_QWEN_MAX_NEW_TOKENS = 1024
 
-    def __init__(self, model_id, device=None):
+    def __init__(self, model_id, device=None, asr_terms=None, asr_corrections=None):
         self.model_id = model_id
         self.device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
         self.qwen_max_new_tokens = self._resolve_qwen_max_new_tokens()
+        self.asr_terms = list(asr_terms or [])
+        self.asr_corrections = dict(asr_corrections or {})
+        self.qwen_prompt = self._build_qwen_prompt(self.asr_terms)
         self._backend = "transformers"
         self._pipeline = None
         self._qwen_model = None
@@ -47,18 +50,39 @@ class ASREngine:
         model = (self.model_id or "").lower()
         return "qwen3-asr" in model
 
+    @staticmethod
+    def _build_qwen_prompt(terms):
+        cleaned = []
+        seen = set()
+        for term in terms:
+            value = str(term).strip()
+            if not value:
+                continue
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(value)
+        if not cleaned:
+            return None
+        joined = "、".join(cleaned[:32])
+        return (
+            "这是日语语音转写任务。请保持专有名词和术语拼写稳定，优先使用以下词汇："
+            f"{joined}"
+        )
+
     def _build_asr_backend(self):
         if self._is_qwen3_asr():
             if Qwen3ASRModel is None:
                 raise ImportError(
-                    "qwen-asr package is required for Qwen3-ASR models. "
-                    "Run pip install qwen-asr and retry."
+                    "使用 Qwen3-ASR 模型需要安装 qwen-asr 包。"
+                    "请运行 pip install qwen-asr 后重试。"
                 )
             self._backend = "qwen_asr"
             self._qwen_model = self._build_qwen_model()
             return
         if pipeline is None:
-            raise ImportError("Missing transformers package. Run pip install -r requirements.txt")
+            raise ImportError("缺少 transformers 包。请运行 pip install -r requirements.txt")
         self._backend = "transformers"
         self._pipeline = self._build_pipeline()
 
@@ -76,7 +100,7 @@ class ASREngine:
             )
         except Exception as load_error:
             if use_cuda:
-                print(f"Qwen ASR model load on CUDA failed, fallback to CPU: {load_error}")
+                print(f"Qwen ASR 模型在 CUDA 加载失败，已回退到 CPU：{load_error}")
                 return Qwen3ASRModel.from_pretrained(
                     self.model_id,
                     dtype=torch.float32,
@@ -84,7 +108,7 @@ class ASREngine:
                     max_inference_batch_size=16,
                     max_new_tokens=self.qwen_max_new_tokens,
                 )
-            raise RuntimeError(f"Failed to load Qwen ASR model {self.model_id}: {load_error}") from load_error
+            raise RuntimeError(f"加载 Qwen ASR 模型失败 {self.model_id}：{load_error}") from load_error
 
     def _build_pipeline(self):
         use_cuda = self.device.startswith("cuda") and torch.cuda.is_available()
@@ -99,14 +123,14 @@ class ASREngine:
             )
         except Exception as load_error:
             if use_cuda:
-                print(f"ASR model load on CUDA failed, fallback to CPU: {load_error}")
+                print(f"ASR 模型在 CUDA 加载失败，已回退到 CPU：{load_error}")
                 return pipeline(
                     task="automatic-speech-recognition",
                     model=self.model_id,
                     device=-1,
                     torch_dtype=torch.float32,
                 )
-            raise RuntimeError(f"Failed to load ASR model {self.model_id}: {load_error}") from load_error
+            raise RuntimeError(f"加载 ASR 模型失败 {self.model_id}：{load_error}") from load_error
 
     def _normalize_segments(self, asr_output, audio_duration):
         chunks = asr_output.get("chunks") if isinstance(asr_output, dict) else None
@@ -213,6 +237,15 @@ class ASREngine:
             )
         return fallback_segments
 
+    def _apply_asr_corrections(self, text):
+        output = str(text or "")
+        if not output or not self.asr_corrections:
+            return output
+        for source, target in self.asr_corrections.items():
+            if source and target:
+                output = output.replace(source, target)
+        return output
+
     def transcribe(self, audio_path, quality_mode="fast"):
         if self._backend == "qwen_asr":
             audio_duration = max(0.5, JapaneseVideoSubtitleGenerator.get_audio_duration(audio_path))
@@ -224,21 +257,33 @@ class ASREngine:
             ]
             results = None
             last_error = None
+            prompt_variants = [None]
+            if self.qwen_prompt:
+                prompt_variants = ["prompt", "system_prompt", "text_prompt", None]
             for kwargs in attempts:
-                try:
-                    results = self._qwen_model.transcribe(audio=audio_path, **kwargs)
+                for prompt_key in prompt_variants:
+                    merged = dict(kwargs)
+                    if prompt_key and self.qwen_prompt:
+                        merged[prompt_key] = self.qwen_prompt
+                    try:
+                        results = self._qwen_model.transcribe(audio=audio_path, **merged)
+                        break
+                    except Exception as err:
+                        last_error = err
+                        # Qwen requires forced_aligner for timestamps in some setups.
+                        # Fallback to non-timestamp mode instead of failing the whole chunk.
+                        continue
+                if results is not None:
                     break
-                except Exception as err:
-                    last_error = err
-                    # Qwen requires forced_aligner for timestamps in some setups.
-                    # Fallback to non-timestamp mode instead of failing the whole chunk.
-                    continue
             if results is None:
-                raise RuntimeError(f"Qwen ASR transcription failed: {last_error}") from last_error
-            return self._normalize_qwen_segments(
+                raise RuntimeError(f"Qwen ASR 转写失败：{last_error}") from last_error
+            normalized = self._normalize_qwen_segments(
                 results,
                 audio_duration,
             )
+            for segment in normalized:
+                segment["text"] = self._apply_asr_corrections(segment.get("text", ""))
+            return normalized
 
         generate_kwargs = {"language": "ja"}
         if quality_mode == "accurate":
@@ -247,13 +292,32 @@ class ASREngine:
             output = self._pipeline(audio_path, return_timestamps=True, generate_kwargs=generate_kwargs)
         except Exception:
             output = self._pipeline(audio_path, return_timestamps=True)
-        return self._normalize_segments(output, max(0.5, JapaneseVideoSubtitleGenerator.get_audio_duration(audio_path)))
+        normalized = self._normalize_segments(
+            output,
+            max(0.5, JapaneseVideoSubtitleGenerator.get_audio_duration(audio_path)),
+        )
+        for segment in normalized:
+            segment["text"] = self._apply_asr_corrections(segment.get("text", ""))
+        return normalized
 
-    def transcribe_region(self, audio_path, start_seconds, end_seconds, quality_mode="accurate"):
+    def transcribe_region(
+        self,
+        audio_path,
+        start_seconds,
+        end_seconds,
+        quality_mode="accurate",
+        audio_filter=None,
+    ):
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
             temp_clip = temp_file.name
         try:
-            JapaneseVideoSubtitleGenerator.extract_audio_span(audio_path, temp_clip, start_seconds, end_seconds)
+            JapaneseVideoSubtitleGenerator.extract_audio_span(
+                audio_path,
+                temp_clip,
+                start_seconds,
+                end_seconds,
+                audio_filter=audio_filter,
+            )
             region_segments = self.transcribe(temp_clip, quality_mode=quality_mode)
             duration = max(0.1, end_seconds - start_seconds)
             fixed_segments = []
@@ -275,7 +339,7 @@ class ASREngine:
 class TranslationEngine:
     def __init__(self, primary_model_id, advanced_model_id, use_advanced=False, device=None):
         if pipeline is None and (AutoModelForCausalLM is None or AutoTokenizer is None):
-            raise ImportError("Missing transformers package. Run pip install -r requirements.txt")
+            raise ImportError("缺少 transformers 包。请运行 pip install -r requirements.txt")
         self.primary_model_id = primary_model_id
         self.advanced_model_id = advanced_model_id
         self.use_advanced = use_advanced
@@ -294,7 +358,7 @@ class TranslationEngine:
 
     def _load_hy_model(self, model_id):
         if AutoModelForCausalLM is None or AutoTokenizer is None:
-            raise RuntimeError("transformers AutoModel/AutoTokenizer are unavailable.")
+            raise RuntimeError("transformers 的 AutoModel/AutoTokenizer 不可用。")
 
         use_cuda = self.device.startswith("cuda") and torch.cuda.is_available()
         model_kwargs = {"device_map": self.device if use_cuda else "cpu", "trust_remote_code": True}
@@ -316,7 +380,7 @@ class TranslationEngine:
                 return pipeline(task=task_name, model=model_id, device=pipe_device, torch_dtype=dtype), task_name
             except Exception as err:
                 last_error = err
-        raise RuntimeError(f"Failed to load translation model {model_id}: {last_error}")
+        raise RuntimeError(f"加载翻译模型失败 {model_id}：{last_error}")
 
     def _load_pipeline(self):
         model_candidates = []
@@ -337,13 +401,13 @@ class TranslationEngine:
                     self._backend = "pipeline"
                 self.effective_model_id = model_id
                 if model_id == self.advanced_model_id and self.use_advanced:
-                    print(f"Using advanced MT model: {model_id}")
+                    print(f"使用高级 MT 模型：{model_id}")
                 elif self.use_advanced and model_id == self.primary_model_id:
-                    print(f"Advanced MT model load failed. Auto-fallback to: {model_id}")
+                    print(f"高级 MT 模型加载失败，已自动回退到：{model_id}")
                 return
             except Exception as err:
                 errors.append(str(err))
-        raise RuntimeError("Unable to load any MT model:\n" + "\n".join(errors))
+        raise RuntimeError("无法加载任何 MT 模型：\n" + "\n".join(errors))
 
     def _make_prompt(self, text):
         return (
@@ -423,6 +487,24 @@ class JapaneseVideoSubtitleGenerator:
     DEFAULT_MT_MODEL = "tencent/HY-MT1.5-1.8B"
     DEFAULT_ADV_MT_MODEL = "tencent/HY-MT1.5-7B"
     CHECKPOINT_VERSION = 5
+    AUDIO_PRESET_STANDARD = "standard"
+    AUDIO_PRESET_DENOISE = "denoise"
+    AUDIO_PRESET_AGGRESSIVE = "aggressive"
+    AUDIO_FILTER_PRESETS = {
+        AUDIO_PRESET_STANDARD: "highpass=f=80,lowpass=f=8000,volume=1.5,dynaudnorm",
+        AUDIO_PRESET_DENOISE: (
+            "highpass=f=90,lowpass=f=7800,"
+            "afftdn=nr=14:nf=-28:tn=1,"
+            "acompressor=threshold=-21dB:ratio=2.2:attack=15:release=220:makeup=2,"
+            "dynaudnorm=f=200:g=11:p=0.85"
+        ),
+        AUDIO_PRESET_AGGRESSIVE: (
+            "highpass=f=100,lowpass=f=7600,"
+            "afftdn=nr=20:nf=-30:tn=1,"
+            "acompressor=threshold=-24dB:ratio=3.0:attack=10:release=260:makeup=3,"
+            "dynaudnorm=f=150:g=13:p=0.9"
+        ),
+    }
 
     def __init__(
         self,
@@ -434,6 +516,8 @@ class JapaneseVideoSubtitleGenerator:
         use_advanced_mt=False,
         quality_mode="fast",
         glossary_path=None,
+        asr_terms_path=None,
+        audio_preset=AUDIO_PRESET_STANDARD,
         progress_callback=None,
     ):
         self.device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -443,18 +527,31 @@ class JapaneseVideoSubtitleGenerator:
         self.quality_mode = quality_mode if quality_mode in {"fast", "accurate"} else "fast"
         self.glossary_path = glossary_path
         self.glossary = self.load_glossary(glossary_path)
+        self.asr_terms_path = asr_terms_path
+        self.audio_preset = self.resolve_audio_preset(audio_preset)
+        self.asr_terms, self.asr_corrections = self.load_asr_terms(asr_terms_path)
         self.progress_callback = progress_callback
-        print(f"ASR model: {self.asr_model_id}")
-        print(f"MT model: {self.mt_model_id} (advanced: {self.mt_advanced_model_id})")
-        print(f"Device preference: {self.device}")
-        self.asr_engine = ASREngine(model_id=self.asr_model_id, device=self.device)
+        print(f"ASR 模型：{self.asr_model_id}")
+        print(f"MT 模型：{self.mt_model_id}（高级：{self.mt_advanced_model_id}）")
+        print(f"设备偏好：{self.device}")
+        print(f"音频增强预设：{self.audio_preset}")
+        if self.asr_terms:
+            print(f"ASR 术语条目：{len(self.asr_terms)}")
+        if self.asr_corrections:
+            print(f"ASR 修正规则：{len(self.asr_corrections)}")
+        self.asr_engine = ASREngine(
+            model_id=self.asr_model_id,
+            device=self.device,
+            asr_terms=self.asr_terms,
+            asr_corrections=self.asr_corrections,
+        )
         self.translation_engine = TranslationEngine(
             primary_model_id=self.mt_model_id,
             advanced_model_id=self.mt_advanced_model_id,
             use_advanced=use_advanced_mt,
             device=self.device,
         )
-        print(f"Effective MT model: {self.translation_engine.effective_model_id}")
+        print(f"最终使用的 MT 模型：{self.translation_engine.effective_model_id}")
 
     def _emit_progress(self, percent, message):
         callback = self.progress_callback
@@ -518,7 +615,7 @@ class JapaneseVideoSubtitleGenerator:
         return float(result.stdout.strip())
 
     @staticmethod
-    def extract_audio_span(source_audio_path, output_audio_path, start_seconds, end_seconds):
+    def extract_audio_span(source_audio_path, output_audio_path, start_seconds, end_seconds, audio_filter=None):
         ffmpeg_bin = JapaneseVideoSubtitleGenerator._ffmpeg_bin()
         cmd = [
             ffmpeg_bin,
@@ -529,15 +626,21 @@ class JapaneseVideoSubtitleGenerator:
             str(max(0.0, start_seconds)),
             "-to",
             str(max(start_seconds + 0.1, end_seconds)),
-            "-acodec",
-            "pcm_s16le",
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            output_audio_path,
-            "-y",
         ]
+        if audio_filter:
+            cmd.extend(["-af", str(audio_filter)])
+        cmd.extend(
+            [
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                output_audio_path,
+                "-y",
+            ]
+        )
         subprocess.run(cmd, check=True, capture_output=True, **JapaneseVideoSubtitleGenerator._subprocess_kwargs())
 
     @staticmethod
@@ -569,12 +672,55 @@ class JapaneseVideoSubtitleGenerator:
                         continue
                     glossary[source.strip()] = target.strip()
         except Exception as err:
-            print(f"Warning: failed to load glossary file {glossary_path}: {err}")
+            print(f"警告：加载术语表失败 {glossary_path}：{err}")
         return glossary
 
-    def extract_audio(self, video_path, audio_path):
-        print("Extracting audio from video...")
+    @classmethod
+    def resolve_audio_preset(cls, preset):
+        normalized = str(preset or "").strip().lower()
+        if normalized in cls.AUDIO_FILTER_PRESETS:
+            return normalized
+        return cls.AUDIO_PRESET_STANDARD
+
+    @classmethod
+    def get_audio_filter_chain(cls, preset):
+        normalized = cls.resolve_audio_preset(preset)
+        return cls.AUDIO_FILTER_PRESETS.get(normalized, cls.AUDIO_FILTER_PRESETS[cls.AUDIO_PRESET_STANDARD])
+
+    @staticmethod
+    def load_asr_terms(asr_terms_path):
+        if not asr_terms_path:
+            return [], {}
+        terms = []
+        corrections = {}
+        seen = set()
+        try:
+            with open(asr_terms_path, "r", encoding="utf-8") as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=>" in line:
+                        source, target = line.split("=>", 1)
+                        source = source.strip()
+                        target = target.strip()
+                        if source and target:
+                            corrections[source] = target
+                        continue
+                    term = line.strip()
+                    key = term.lower()
+                    if term and key not in seen:
+                        seen.add(key)
+                        terms.append(term)
+        except Exception as err:
+            print(f"警告：加载 ASR 术语失败 {asr_terms_path}：{err}")
+        return terms, corrections
+
+    def extract_audio(self, video_path, audio_path, audio_preset=None):
+        print("正在从视频中提取音频...")
         ffmpeg_bin = self._ffmpeg_bin()
+        selected_preset = self.resolve_audio_preset(audio_preset or self.audio_preset)
+        audio_filter = self.get_audio_filter_chain(selected_preset)
         cmd = [
             ffmpeg_bin,
             "-hide_banner",
@@ -587,12 +733,12 @@ class JapaneseVideoSubtitleGenerator:
             "-ac",
             "1",
             "-af",
-            "highpass=f=80,lowpass=f=8000,volume=1.5,dynaudnorm",
+            audio_filter,
             audio_path,
             "-y",
         ]
         subprocess.run(cmd, check=True, capture_output=True, **self._subprocess_kwargs())
-        print(f"Audio extraction completed: {audio_path}")
+        print(f"音频提取完成：{audio_path}")
         return True
 
     def split_audio_chunks(self, audio_path, chunk_size_seconds, overlap_seconds):
@@ -642,7 +788,7 @@ class JapaneseVideoSubtitleGenerator:
             if payload.get("status") == "completed":
                 return payload
         except Exception as err:
-            print(f"Warning: failed reading checkpoint {file_path}: {err}")
+            print(f"警告：读取检查点失败 {file_path}：{err}")
         return None
 
     def _save_chunk_checkpoint(self, checkpoint_dir, chunk_index, payload):
@@ -658,7 +804,34 @@ class JapaneseVideoSubtitleGenerator:
         overlap_like = previous_segment is not None and previous_segment["end"] > segment["start"]
         too_short = len(text) <= 2
         low_confidence = confidence < 0.45
-        return overlap_like or too_short or low_confidence
+        duration = max(0.1, float(segment.get("end", 0.0)) - float(segment.get("start", 0.0)))
+        return overlap_like or too_short or low_confidence or self._looks_like_bad_asr(text, duration)
+
+    @staticmethod
+    def _looks_like_bad_asr(text, duration_seconds):
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return True
+        if re.search(r"(.)\1{5,}", cleaned):
+            return True
+        duration = max(0.1, float(duration_seconds))
+        jp_chars = re.findall(r"[ぁ-んァ-ン一-龯々ー]", cleaned)
+        jp_ratio = len(jp_chars) / max(1, len(cleaned))
+        if duration >= 1.2 and jp_ratio < 0.18:
+            return True
+        if len(cleaned) > int(duration * 20):
+            return True
+        punct_ratio = len(re.findall(r"[^\w\sぁ-んァ-ン一-龯々ー。、「」！？!?\-]", cleaned)) / max(1, len(cleaned))
+        return punct_ratio > 0.25
+
+    @classmethod
+    def _next_audio_preset(cls, preset):
+        current = cls.resolve_audio_preset(preset)
+        if current == cls.AUDIO_PRESET_STANDARD:
+            return cls.AUDIO_PRESET_DENOISE
+        if current == cls.AUDIO_PRESET_DENOISE:
+            return cls.AUDIO_PRESET_AGGRESSIVE
+        return cls.AUDIO_PRESET_AGGRESSIVE
 
     @staticmethod
     def _looks_like_single_block(segments, chunk_duration):
@@ -673,8 +846,8 @@ class JapaneseVideoSubtitleGenerator:
         span = max(0.0, end - start)
         return span >= max(20.0, chunk_duration * 0.8)
 
-    def _recover_segments_by_windows(self, chunk_audio_path, chunk_duration, quality_mode):
-        window_seconds = 30.0
+    def _recover_segments_by_windows(self, chunk_audio_path, chunk_duration, quality_mode, audio_filter=None):
+        window_seconds = 30.0 if quality_mode != "accurate" else 20.0
         overlap_seconds = 2.0
         recovered = []
         start = 0.0
@@ -685,6 +858,7 @@ class JapaneseVideoSubtitleGenerator:
                 start,
                 end,
                 quality_mode=quality_mode,
+                audio_filter=audio_filter,
             )
             for segment in region_segments:
                 text = segment.get("text", "").strip()
@@ -831,10 +1005,12 @@ class JapaneseVideoSubtitleGenerator:
         overlap_seconds=1.5,
         quality_mode=None,
         glossary_path=None,
+        asr_terms_path=None,
+        audio_preset=None,
     ):
         video_path = str(Path(video_path).resolve())
         if not video_path.lower().endswith((".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv")):
-            print(f"Error: {video_path} is not a supported video format")
+            print(f"错误：{video_path} 不是支持的视频格式")
             return False
 
         if output_dir is None:
@@ -843,37 +1019,55 @@ class JapaneseVideoSubtitleGenerator:
         os.makedirs(output_dir, exist_ok=True)
 
         active_quality = quality_mode if quality_mode in {"fast", "accurate"} else self.quality_mode
+        active_audio_preset = self.resolve_audio_preset(audio_preset or self.audio_preset)
+        active_audio_filter = self.get_audio_filter_chain(active_audio_preset)
+        active_chunk_size = int(chunk_size_seconds)
+        active_overlap = float(overlap_seconds)
         if glossary_path and glossary_path != self.glossary_path:
             self.glossary_path = glossary_path
             self.glossary = self.load_glossary(glossary_path)
+        if asr_terms_path and asr_terms_path != self.asr_terms_path:
+            self.asr_terms_path = asr_terms_path
+            self.asr_terms, self.asr_corrections = self.load_asr_terms(asr_terms_path)
+            self.asr_engine.asr_terms = list(self.asr_terms)
+            self.asr_engine.asr_corrections = dict(self.asr_corrections)
+            self.asr_engine.qwen_prompt = self.asr_engine._build_qwen_prompt(self.asr_terms)
+        if active_quality == "accurate" and active_chunk_size >= 120:
+            active_chunk_size = 60
+            print("精确模式已自动调整分块时长为 60 秒，以提升复杂噪声音频识别稳定性。")
+        if active_quality == "accurate" and active_overlap < 2.0:
+            active_overlap = 2.0
 
         video_name = os.path.splitext(os.path.basename(video_path))[0]
         audio_path = os.path.join(output_dir, f"{video_name}_{uuid.uuid4().hex}_temp.wav")
         subtitle_path = os.path.join(output_dir, f"{video_name}_bilingual.srt")
         checkpoint_dir = os.path.join(output_dir, f"{video_name}_checkpoints")
 
-        print(f"Chunk size: {chunk_size_seconds}s, overlap: {overlap_seconds}s, quality: {active_quality}")
-        print(f"Checkpoint directory: {checkpoint_dir}")
+        print(
+            f"分块：{active_chunk_size}s，重叠：{active_overlap}s，质量：{active_quality}，"
+            f"音频预设：{active_audio_preset}"
+        )
+        print(f"检查点目录：{checkpoint_dir}")
 
         all_segments = []
         try:
-            self._emit_progress(0.0, "Extracting audio...")
-            self.extract_audio(video_path, audio_path)
-            chunks = self.split_audio_chunks(audio_path, chunk_size_seconds, overlap_seconds)
+            self._emit_progress(0.0, "正在提取音频...")
+            self.extract_audio(video_path, audio_path, audio_preset=active_audio_preset)
+            chunks = self.split_audio_chunks(audio_path, active_chunk_size, active_overlap)
             total_chunks = max(1, len(chunks))
             for chunk in chunks:
                 existing = self._load_chunk_checkpoint(checkpoint_dir, chunk["index"])
                 if existing:
-                    print(f"Resuming: chunk {chunk['index']} already completed")
+                    print(f"继续处理：分块 {chunk['index']} 已完成")
                     all_segments.extend(existing.get("segments", []))
                     for source, target in existing.get("translation_memory", {}).items():
                         self.translation_engine.memory[source] = target
                     progress = ((chunk["index"] + 1) / total_chunks) * 95.0
-                    self._emit_progress(progress, f"Resumed chunk {chunk['index'] + 1}/{total_chunks}")
+                    self._emit_progress(progress, f"已续跑分块 {chunk['index'] + 1}/{total_chunks}")
                     continue
 
                 print(
-                    f"Processing chunk {chunk['index'] + 1}/{len(chunks)} "
+                    f"正在处理分块 {chunk['index'] + 1}/{len(chunks)} "
                     f"({chunk['start']:.2f}s - {chunk['end']:.2f}s)"
                 )
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_chunk:
@@ -882,17 +1076,18 @@ class JapaneseVideoSubtitleGenerator:
                 try:
                     self._emit_progress(
                         (chunk["index"] / total_chunks) * 95.0,
-                        f"Processing chunk {chunk['index'] + 1}/{total_chunks}",
+                        f"正在处理分块 {chunk['index'] + 1}/{total_chunks}",
                     )
                     self.extract_audio_span(audio_path, chunk_audio_path, chunk["start"], chunk["end"])
                     local_segments = self.asr_engine.transcribe(chunk_audio_path, quality_mode=active_quality)
                     chunk_duration = max(0.1, chunk["end"] - chunk["start"])
                     if self._looks_like_single_block(local_segments, chunk_duration):
-                        print("Detected coarse ASR timing. Retrying this chunk with short windows...")
+                        print("检测到 ASR 时间戳较粗糙，使用短窗口重试该分块...")
                         recovered = self._recover_segments_by_windows(
                             chunk_audio_path,
                             chunk_duration=chunk_duration,
                             quality_mode=active_quality,
+                            audio_filter=active_audio_filter,
                         )
                         if recovered:
                             local_segments = recovered
@@ -931,7 +1126,13 @@ class JapaneseVideoSubtitleGenerator:
                             local_start = max(0.0, flagged_segment["start"] - chunk["start"])
                             local_end = max(local_start + 0.1, flagged_segment["end"] - chunk["start"])
                             refined = self.asr_engine.transcribe_region(
-                                chunk_audio_path, local_start, local_end, quality_mode="accurate"
+                                chunk_audio_path,
+                                local_start,
+                                local_end,
+                                quality_mode="accurate",
+                                audio_filter=self.get_audio_filter_chain(
+                                    self._next_audio_preset(active_audio_preset)
+                                ),
                             )
                             if refined:
                                 best = refined[0]
@@ -957,34 +1158,34 @@ class JapaneseVideoSubtitleGenerator:
                     self._save_chunk_checkpoint(checkpoint_dir, chunk["index"], checkpoint_payload)
                     all_segments.extend(merged_chunk_segments)
                     progress = ((chunk["index"] + 1) / total_chunks) * 95.0
-                    self._emit_progress(progress, f"Processed chunk {chunk['index'] + 1}/{total_chunks}")
+                    self._emit_progress(progress, f"已处理分块 {chunk['index'] + 1}/{total_chunks}")
                 except Exception as chunk_error:
                     self._save_chunk_checkpoint(
                         checkpoint_dir,
                         chunk["index"],
                         {"status": "failed", "chunk_index": chunk["index"], "error": str(chunk_error)},
                     )
-                    print(f"Chunk {chunk['index']} failed: {chunk_error}")
+                    print(f"分块 {chunk['index']} 失败：{chunk_error}")
                     continue
                 finally:
                     if os.path.exists(chunk_audio_path):
                         os.remove(chunk_audio_path)
 
             merged_segments = self._merge_boundary_segments(all_segments)
-            self._emit_progress(97.0, "Writing subtitle file...")
+            self._emit_progress(97.0, "正在写入字幕文件...")
             self.generate_bilingual_srt(merged_segments, subtitle_path)
-            self._emit_progress(100.0, "Subtitle generation completed")
-            print(f"Processing completed. Subtitle file: {subtitle_path}")
+            self._emit_progress(100.0, "字幕生成完成")
+            print(f"处理完成。字幕文件：{subtitle_path}")
             return subtitle_path
         except Exception as e:
-            print(f"Error during processing: {e}")
+            print(f"处理过程中发生错误：{e}")
             return False
         finally:
             if os.path.exists(audio_path):
                 os.remove(audio_path)
 
     def generate_bilingual_srt(self, segments, output_path):
-        print("Generating bilingual subtitles...")
+        print("正在生成双语字幕...")
         cleaned = [s for s in segments if s.get("text", "").strip()]
         cleaned.sort(key=lambda x: x["start"])
         with open(output_path, "w", encoding="utf-8") as f:
@@ -993,4 +1194,4 @@ class JapaneseVideoSubtitleGenerator:
                 f.write(f"{self.format_time(segment['start'])} --> {self.format_time(segment['end'])}\n")
                 f.write(f"{segment['text'].strip()}\n{segment.get('zh_text', '').strip()}\n\n")
                 if index % 20 == 0:
-                    print(f"Processing progress: {index}/{len(cleaned)}")
+                    print(f"字幕写入进度：{index}/{len(cleaned)}")

@@ -21,7 +21,7 @@ def find_ffmpeg():
     fallback = "C:/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe"
     if os.path.exists(fallback):
         return fallback
-    raise FileNotFoundError("ffmpeg not found in PATH or fallback path")
+    raise FileNotFoundError("未在 PATH 或默认路径中找到 ffmpeg")
 
 
 def find_ffprobe():
@@ -32,4 +32,4 @@ def find_ffprobe():
     fallback = "C:/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffprobe.exe"
     if os.path.exists(fallback):
         return fallback
-    raise FileNotFoundError("ffprobe not found in PATH or fallback path")
+    raise FileNotFoundError("未在 PATH 或默认路径中找到 ffprobe")

@@ -1,14 +1,14 @@
 @echo off
 chcp 65001 >nul
-echo Japanese Subtitle Generator
-echo ===================
+echo 日语字幕生成器
+echo ==============
 echo.
 
 REM Check if Python is available
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo Error: Python not found
-    echo Please run install.bat to install dependencies
+    echo 错误：未找到 Python
+    echo 请先运行 install.bat 安装依赖
     echo.
     pause
     exit /b 1
@@ -17,11 +17,11 @@ if errorlevel 1 (
 REM Check if required packages are installed
 python -c "import torch, transformers, accelerate, tokenizers, safetensors, sentencepiece, qwen_asr" >nul 2>&1
 if errorlevel 1 (
-    echo Missing required dependencies, installing...
+    echo 缺少必要依赖，正在安装...
     pip install -r requirements.txt
     if errorlevel 1 (
-        echo Dependency installation failed
-        echo Please run: pip install -r requirements.txt
+        echo 依赖安装失败
+        echo 请运行：pip install -r requirements.txt
         pause
         exit /b 1
     )
@@ -30,11 +30,11 @@ if errorlevel 1 (
 REM Check if FFmpeg is available
 ffmpeg -version >nul 2>&1
 if errorlevel 1 (
-    echo Warning: FFmpeg not found
-    echo Please download and install FFmpeg from https://ffmpeg.org/download.html
+    echo 警告：未找到 FFmpeg
+    echo 请从 https://ffmpeg.org/download.html 下载并安装 FFmpeg
 )
 
-echo Starting application...
+echo 正在启动程序...
 
 REM Launch GUI detached so this window can close without affecting the app
 REM Prefer pythonw (no console). Fallback to python if pythonw not available.

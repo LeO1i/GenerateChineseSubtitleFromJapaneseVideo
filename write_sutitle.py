@@ -26,7 +26,7 @@ class WriteSubtitle:
         """
         Extract Chinese-only subtitles from a bilingual SRT file
         """
-        print("Extracting Chinese subtitles from bilingual SRT...")
+        print("正在从双语 SRT 中提取中文字幕...")
         try:
             with open(bilingual_srt_path, 'r', encoding='utf-8') as f:
                 blocks = f.read().split('\n\n')
@@ -61,18 +61,18 @@ class WriteSubtitle:
                     f.write(f"{timestamp_line}\n")
                     f.write(f"{chinese_text}\n\n")
             
-            print(f"Chinese-only SRT extracted: {chinese_only_srt_path}")
+            print(f"已生成仅中文 SRT：{chinese_only_srt_path}")
             return chinese_only_srt_path
             
         except Exception as e:
-            print(f"Error extracting Chinese subtitles: {e}")
+            print(f"提取中文字幕时出错：{e}")
             return None
 
     def burn_subtitles(self, video_path, srt_path, output_path, font_name='Microsoft YaHei'):
         """
         Use FFmpeg to burn the chinese subtitle to the bottom of video and output the new video
         """
-        print("Burning subtitle to video...")
+        print("正在将字幕烧录到视频中...")
         try:
             # Check if this is a bilingual SRT file and extract Chinese-only if needed
             temp_chinese_srt = None
@@ -94,13 +94,13 @@ class WriteSubtitle:
                     break
             
             if is_bilingual:
-                print("Detected bilingual SRT file, extracting Chinese subtitles...")
+                print("检测到双语 SRT 文件，正在提取中文字幕...")
                 temp_chinese_srt = srt_path.replace('.srt', '_temp_chinese.srt')
                 extracted_srt = self.extract_chinese_from_bilingual_srt(srt_path, temp_chinese_srt)
                 if extracted_srt:
                     srt_to_use = extracted_srt
                 else:
-                    print("Warning: Failed to extract Chinese subtitles, using original file")
+                    print("警告：提取中文字幕失败，将使用原始文件")
             
             ffmpeg_bin = find_ffmpeg()
             # Using POSIX style path
@@ -133,7 +133,7 @@ class WriteSubtitle:
                 '-y'
             ]
             subprocess.run(cmd, check=True, capture_output=True, **subprocess_kwargs())
-            print(f"Burning finished: {output_path}")
+            print(f"烧录完成：{output_path}")
             
             # Clean up temporary file
             if temp_chinese_srt and os.path.exists(temp_chinese_srt):
@@ -145,7 +145,7 @@ class WriteSubtitle:
                 stderr = e.stderr.decode('utf-8', errors='ignore') if e.stderr else ''
             except Exception:
                 stderr = str(e)
-            print(f"Burning fail: {e}\nFFmpeg Wrong Output:\n{stderr}")
+            print(f"烧录失败：{e}\nFFmpeg 错误输出：\n{stderr}")
             
             # Clean up temporary file on error
             if temp_chinese_srt and os.path.exists(temp_chinese_srt):
